@@ -12,6 +12,12 @@
 - 自然语言查询合同内容
 - 返回答案及来源页码定位
 
+## 测试数据
+
+可从以下来源获取测试用PDF合同：
+- [LawDepot](https://www.lawdepot.com) - 免费合同模板
+- Google搜索：`real estate loan agreement filetype:pdf`
+
 ## 快速开始
 
 1. 安装依赖
