@@ -68,8 +68,18 @@ streamlit run app.py
 
 ### 下一步优化方向
 
-- 按文档类型选择不同的 chunk 策略：
-  - PDF：按页优先，页内定长切分
+- 👉 分层判断文档适合什么chunk再去执行
+
+第一层（规则）
+文件类型（pdf / docx）
+行长度分布
+是否有 section / article
+第二层（简单统计）
+平均行长度
+标题比例
+换行密度
+第三层（可选 LLM）
+复杂场景才用
   - TXT / DOCX：段落优先
 - 引入 hybrid search（语义 + 关键词）
 - 增强 query 扩写能力（如 payment → rent / consideration）
