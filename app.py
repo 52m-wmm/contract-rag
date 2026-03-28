@@ -1,120 +1,104 @@
 import os
+import tempfile
 import streamlit as st
-import chromadb
-from chromadb import Documents, EmbeddingFunction, Embeddings
-from zhipuai import ZhipuAI
-import pdfplumber
-from dotenv import load_dotenv
 
-load_dotenv()
+from services.rag_pipeline import index_document, query_contract
+from services.vector_store import list_indexed_documents, delete_document_by_source
 
-ZHIPUAI_API_KEY = os.getenv("ZHIPUAI_API_KEY")
-client_zhipu = ZhipuAI(api_key=ZHIPUAI_API_KEY)
+st.set_page_config(page_title="AI 文档问答系统", layout="wide")
 
-# 智谱嵌入函数
-class ZhipuEmbeddingFunction(EmbeddingFunction):
-    def __call__(self, input: Documents) -> Embeddings:
-        embeddings = []
-        for text in input:
-            response = client_zhipu.embeddings.create(
-                model="embedding-3",
-                input=text
-            )
-            embeddings.append(response.data[0].embedding)
-        return embeddings
+st.title("📄 AI 文档问答系统")
 
-# 初始化ChromaDB
-@st.cache_resource
-def init_collection():
-    chroma_client = chromadb.Client()
-    embedding_fn = ZhipuEmbeddingFunction()
-    return chroma_client.get_or_create_collection(
-        name="contracts",
-        embedding_function=embedding_fn
-    )
+# =========================
+# 上传文档
+# =========================
+st.sidebar.header("上传文档")
 
-collection = init_collection()
-
-# 提取PDF
-def extract_pdf_chunks(pdf_path):
-    chunks = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for i, page in enumerate(pdf.pages):
-            text = page.extract_text()
-            if not text:
-                continue
-            chunks.append({
-                "text": text,
-                "page": i + 1,
-                "source": pdf_path
-            })
-    return chunks
-
-# 导入PDF
-def index_pdf(pdf_path):
-    chunks = extract_pdf_chunks(pdf_path)
-    collection.add(
-        documents=[c["text"] for c in chunks],
-        metadatas=[{"page": c["page"], "source": c["source"]} for c in chunks],
-        ids=[f"{pdf_path}_page_{c['page']}" for c in chunks]
-    )
-    return len(chunks)
-
-# 查询
-def query_contract(question):
-    results = collection.query(
-        query_texts=[question],
-        n_results=3
-    )
-    
-    context = ""
-    sources = []
-    for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
-        context += f"\n[第{meta['page']}页]\n{doc}\n"
-        sources.append(f"第{meta['page']}页")
-    
-    response = client_zhipu.chat.completions.create(
-        model="glm-4-flash",
-        messages=[
-            {
-                "role": "system",
-                "content": "你是一个合同分析助手，根据提供的合同内容回答问题，回答要简洁准确，并说明信息来自哪一页。"
-            },
-            {
-                "role": "user",
-                "content": f"合同内容：\n{context}\n\n问题：{question}"
-            }
-        ]
-    )
-    
-    return response.choices[0].message.content, sources
-
-# ===== Streamlit界面 =====
-st.title("📄 合同智能查询系统")
-
-# 上传PDF
-st.sidebar.header("上传合同")
-uploaded_file = st.sidebar.file_uploader("选择PDF文件", type="pdf")
+uploaded_file = st.sidebar.file_uploader("选择文件", type=["pdf", "txt", "docx"])
 
 if uploaded_file:
-    # 保存到本地
-    with open(uploaded_file.name, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    
-    if st.sidebar.button("导入合同"):
-        with st.spinner("正在导入..."):
-            count = index_pdf(uploaded_file.name)
-            st.sidebar.success(f"已导入 {count} 个chunk")
+    if st.sidebar.button("导入文档"):
+        with tempfile.NamedTemporaryFile(
+            delete=False, suffix=os.path.splitext(uploaded_file.name)[1]
+        ) as tmp_file:
+            tmp_file.write(uploaded_file.getbuffer())
+            temp_path = tmp_file.name
 
-# 查询区域
+        with st.spinner("正在导入并建立索引..."):
+            count = index_document(temp_path, source_name=uploaded_file.name)
+
+        st.sidebar.success(f"已导入 {count} 个 chunks")
+
+
+# =========================
+# 检索参数
+# =========================
+st.sidebar.header("检索参数")
+
+top_k = st.sidebar.slider(
+    "top_k（检索片段数）",
+    min_value=1,
+    max_value=8,
+    value=3,
+    help="从向量库中取最相关的几个文本块",
+)
+
+
+# =========================
+# 文档列表
+# =========================
+st.sidebar.header("已导入文档")
+
+documents = list_indexed_documents()
+
+if not documents:
+    st.sidebar.caption("暂无已导入文档")
+else:
+    for doc in documents:
+        st.sidebar.markdown(
+            f"**{doc['source']}**\n\n"
+            f"- pages: {doc['page_count']}\n"
+            f"- chunks: {doc['chunk_count']}"
+        )
+
+        if st.sidebar.button(f"删除 {doc['source']}", key=f"delete_{doc['source']}"):
+            delete_document_by_source(doc["source"])
+            st.sidebar.success(f"已删除 {doc['source']}")
+            st.rerun()
+
+
+# =========================
+# 问答区域
+# =========================
 st.header("提问")
-question = st.text_input("输入你的问题", placeholder="例如：What are the payment terms?")
 
-if st.button("查询") and question:
-    with st.spinner("查询中..."):
-        answer, sources = query_contract(question)
-    
-    st.subheader("答案")
-    st.write(answer)
-    
-    st.caption(f"来源：{', '.join(sources)}")
+question = st.text_input("输入你的问题", placeholder="例如：付款条款是什么？")
+
+if st.button("查询"):
+    if not question.strip():
+        st.warning("请输入问题")
+    else:
+        with st.spinner("查询中..."):
+            answer, sources, retrieved_chunks = query_contract(question, top_k=top_k)
+
+        st.subheader("🧠 答案")
+        st.write(answer)
+
+        if sources:
+            st.subheader("📚 来源")
+            for source in sources:
+                st.write(f"- {source}")
+        else:
+            st.caption("无引用来源")
+
+        st.subheader("🔍 实际召回的文本块（调试）")
+        if not retrieved_chunks:
+            st.write("没有召回任何 chunk")
+        else:
+            for chunk in retrieved_chunks:
+                title = (
+                    f"{chunk['source']} | 第{chunk['page']}页 | chunk {chunk['chunk_index']} "
+                    f"| {chunk['file_type']} | {chunk['doc_category']} | {chunk['chunk_strategy']}"
+                )
+                with st.expander(title):
+                    st.write(chunk["text"])

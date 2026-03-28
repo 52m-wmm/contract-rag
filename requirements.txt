@@ -3,3 +3,4 @@ zhipuai
 pdfplumber
 streamlit
 python-dotenv
+python-docx
