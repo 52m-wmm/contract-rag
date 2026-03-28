@@ -286,4 +286,6 @@ streamlit run app.py
 
 ## 界面预览
 
-![合同智能查询系统](screenshot.png)
+![合同智能查询系统](1.png)
+![合同智能查询系统](2.png)
+![合同智能查询系统](3.png)
