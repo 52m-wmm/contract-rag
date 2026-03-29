@@ -282,7 +282,7 @@ streamlit run app.py
 - 替换为 OpenAI Embeddings + pgvector（生产环境）
 - FastAPI 后端 + 前端界面
 - Google Drive 自动同步
-- 合同到期自动提醒
+- hybird research
 
 🧪 当前适合测试的文档类型
 
