@@ -5,22 +5,33 @@ from typing import List, Dict
 import pdfplumber
 from docx import Document
 
+from services.text_normalizer import normalize_pdf_text, normalize_plain_text
+
 
 def extract_pdf_pages(file_path: str) -> List[Dict]:
-    pages = []
+    raw_pages = []
 
     with pdfplumber.open(file_path) as pdf:
         for i, page in enumerate(pdf.pages):
             text = page.extract_text()
             if not text:
                 continue
+            raw_pages.append({"page": i + 1, "text": text})
 
-            pages.append(
-                {
-                    "page": i + 1,
-                    "text": text,
-                }
-            )
+    all_page_texts = [p["text"] for p in raw_pages]
+
+    pages = []
+    for p in raw_pages:
+        pages.append(
+            {
+                "page": p["page"],
+                "text": p["text"],
+                "normalized_text": normalize_pdf_text(
+                    p["text"], all_page_texts=all_page_texts
+                ),
+                "file_type": "pdf",
+            }
+        )
 
     return pages
 
@@ -33,6 +44,8 @@ def extract_txt_pages(file_path: str) -> List[Dict]:
         {
             "page": 1,
             "text": text,
+            "normalized_text": normalize_plain_text(text),
+            "file_type": "txt",
         }
     ]
 
@@ -46,6 +59,8 @@ def extract_docx_pages(file_path: str) -> List[Dict]:
         {
             "page": 1,
             "text": text,
+            "normalized_text": normalize_plain_text(text),
+            "file_type": "docx",
         }
     ]
 

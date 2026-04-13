@@ -47,3 +47,12 @@ def list_indexed_documents():
 
     documents.sort(key=lambda x: x["source"])
     return documents
+
+
+def get_all_chunks():
+    """返回向量库中全部 (documents, metadatas)，供 BM25 索引重建使用。"""
+    collection = init_collection()
+    data = collection.get(include=["documents", "metadatas"])
+    documents = data.get("documents", [])
+    metadatas = data.get("metadatas", [])
+    return documents, metadatas

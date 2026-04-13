@@ -4,13 +4,25 @@ from dotenv import load_dotenv
 
 from services.parser import extract_document_pages
 from services.chunking import build_page_chunks
-from services.vector_store import init_collection, delete_document_by_source
+from services.vector_store import (
+    init_collection,
+    delete_document_by_source,
+    get_all_chunks,
+)
 from services.document_router import detect_doc_category, choose_chunk_strategy
+from services.bm25_index import rebuild_bm25_index
+from services.retrieval import hybrid_search
 
 load_dotenv()
 
 ZHIPUAI_API_KEY = os.getenv("ZHIPUAI_API_KEY")
 client_zhipu = ZhipuAI(api_key=ZHIPUAI_API_KEY)
+
+
+def _sync_bm25_index():
+    """从向量库全量重建 BM25 内存索引。"""
+    documents, metadatas = get_all_chunks()
+    rebuild_bm25_index(documents, metadatas)
 
 
 def index_document(file_path: str, source_name: str = None):
@@ -21,7 +33,7 @@ def index_document(file_path: str, source_name: str = None):
         return 0
 
     display_name = source_name or os.path.basename(file_path)
-    file_type = pages[0].get("file_type", "unknown")
+    file_type = pages[0].get("file_type") or os.path.splitext(file_path)[1].lstrip(".").lower() or "unknown"
     doc_category = detect_doc_category(file_type=file_type, pages=pages)
     chunk_strategy = choose_chunk_strategy(doc_category)
 
@@ -62,64 +74,42 @@ def index_document(file_path: str, source_name: str = None):
         ],
     )
 
+    _sync_bm25_index()
+
     return len(all_chunks)
 
 
 def query_contract(question: str, top_k: int = 3):
-    collection = init_collection()
+    retrieved_chunks = hybrid_search(question, top_k=top_k)
 
-    results = collection.query(query_texts=[question], n_results=top_k)
-
-    documents_list = results.get("documents", [])
-    metadatas_list = results.get("metadatas", [])
-
-    if not documents_list or not metadatas_list or not documents_list[0]:
-        return "文档中未找到相关信息。", [], []
-
-    documents = documents_list[0]
-    metadatas = metadatas_list[0]
-
-    valid_results = []
-    for doc, meta in zip(documents, metadatas):
-        if doc and doc.strip():
-            valid_results.append((doc, meta))
-
-    if not valid_results:
+    if not retrieved_chunks:
         return "文档中未找到相关信息。", [], []
 
     MAX_CONTEXT_CHARS = 3000
     context_parts = []
     sources = []
-    retrieved_chunks = []
+    used_chunks = []
     current_length = 0
 
-    for doc, meta in valid_results:
+    for chunk in retrieved_chunks:
         source_text = (
-            f"{meta['source']} - 第{meta['page']}页 - chunk {meta['chunk_index']}"
+            f"{chunk['source']} - 第{chunk['page']}页 - chunk {chunk['chunk_index']}"
         )
-        part = f"[文件: {meta['source']} | 第{meta['page']}页 | chunk {meta['chunk_index']}]\n{doc}"
-
-        retrieved_chunks.append(
-            {
-                "source": meta["source"],
-                "page": meta["page"],
-                "chunk_index": meta["chunk_index"],
-                "text": doc,
-                "doc_category": meta.get("doc_category", ""),
-                "chunk_strategy": meta.get("chunk_strategy", ""),
-                "file_type": meta.get("file_type", ""),
-            }
-        )
+        part = f"[文件: {chunk['source']} | 第{chunk['page']}页 | chunk {chunk['chunk_index']}]\n{chunk['text']}"
 
         if current_length + len(part) > MAX_CONTEXT_CHARS:
-            break
+            chunk["in_context"] = False
+            used_chunks.append(chunk)
+            continue
 
+        chunk["in_context"] = True
         context_parts.append(part)
         sources.append(source_text)
+        used_chunks.append(chunk)
         current_length += len(part)
 
     if not context_parts:
-        return "文档中未找到相关信息。", [], retrieved_chunks
+        return "文档中未找到相关信息。", [], used_chunks
 
     context = "\n\n".join(context_parts)
 
@@ -162,4 +152,4 @@ def query_contract(question: str, top_k: int = 3):
         ],
     )
 
-    return response.choices[0].message.content, sources, retrieved_chunks
+    return response.choices[0].message.content, sources, used_chunks

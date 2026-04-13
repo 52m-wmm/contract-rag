@@ -120,7 +120,7 @@ def build_page_chunks(
     page: Dict,
     chunk_strategy: str = "paragraph",
 ) -> List[Dict]:
-    page_text = page.get("text", "")
+    page_text = page.get("normalized_text") or page.get("text", "")
     source_file = page.get("source", "unknown")
     page_number = page.get("page", 1)
 
