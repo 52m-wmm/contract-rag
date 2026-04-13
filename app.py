@@ -2,12 +2,19 @@ import os
 import tempfile
 import streamlit as st
 
-from services.rag_pipeline import index_document, query_contract
+from services.rag_pipeline import index_document, query_contract, _sync_bm25_index
 from services.vector_store import list_indexed_documents, delete_document_by_source
+from services.bm25_index import is_index_ready
 
 st.set_page_config(page_title="AI 文档问答系统", layout="wide")
 
 st.title("📄 AI 文档问答系统")
+
+# =========================
+# 启动时同步 BM25 索引
+# =========================
+if not is_index_ready():
+    _sync_bm25_index()
 
 # =========================
 # 上传文档
@@ -63,6 +70,7 @@ else:
 
         if st.sidebar.button(f"删除 {doc['source']}", key=f"delete_{doc['source']}"):
             delete_document_by_source(doc["source"])
+            _sync_bm25_index()
             st.sidebar.success(f"已删除 {doc['source']}")
             st.rerun()
 
@@ -91,14 +99,39 @@ if st.button("查询"):
         else:
             st.caption("无引用来源")
 
-        st.subheader("🔍 实际召回的文本块（调试）")
+        # =========================
+        # Hybrid 检索调试面板
+        # =========================
+        st.subheader("🔍 Hybrid 检索调试")
         if not retrieved_chunks:
             st.write("没有召回任何 chunk")
         else:
             for chunk in retrieved_chunks:
+                in_ctx = chunk.get("in_context", False)
+                ctx_tag = "✅ 进入上下文" if in_ctx else "⬜ 未进入上下文"
+                fused_rank = chunk.get("fused_rank", "-")
+                dense_rank = chunk.get("dense_rank", "-")
+                bm25_rank = chunk.get("bm25_rank", "-")
+                dense_score = chunk.get("dense_score", 0)
+                bm25_score = chunk.get("bm25_score", 0)
+                rrf_score = chunk.get("rrf_score", 0)
+
                 title = (
-                    f"{chunk['source']} | 第{chunk['page']}页 | chunk {chunk['chunk_index']} "
-                    f"| {chunk['file_type']} | {chunk['doc_category']} | {chunk['chunk_strategy']}"
+                    f"[Rank {fused_rank}] {chunk.get('source','')} | "
+                    f"第{chunk.get('page','')}页 | chunk {chunk.get('chunk_index','')} | "
+                    f"{chunk.get('file_type','')} | {ctx_tag}"
                 )
+
                 with st.expander(title):
-                    st.write(chunk["text"])
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Dense rank", dense_rank)
+                    col1.caption(f"score: {dense_score:.4f}" if isinstance(dense_score, float) else "")
+                    col2.metric("BM25 rank", bm25_rank)
+                    col2.caption(f"score: {bm25_score:.4f}" if isinstance(bm25_score, float) else "")
+                    col3.metric("RRF score", f"{rrf_score:.6f}" if isinstance(rrf_score, float) else rrf_score)
+                    col3.caption(f"fused rank: {fused_rank}")
+
+                    st.markdown("---")
+                    st.markdown(f"**doc_category:** `{chunk.get('doc_category', '')}`  |  "
+                                f"**chunk_strategy:** `{chunk.get('chunk_strategy', '')}`")
+                    st.text(chunk.get("text", "")[:500])

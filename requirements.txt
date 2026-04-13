@@ -4,3 +4,4 @@ pdfplumber
 streamlit
 python-dotenv
 python-docx
+rank-bm25
